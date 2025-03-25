@@ -70,34 +70,7 @@ jobs:
             type=raw,value=latest
             type=sha
       
-      # Step 8: Create Dockerfile if it doesn't exist
-      - name: Create Dockerfile
-        run: |
-          if [ ! -f Dockerfile ]; then
-            cat > Dockerfile << 'EOF'
-            FROM tomcat:9-jre11
-            
-            # Remove default Tomcat applications
-            RUN rm -rf /usr/local/tomcat/webapps/*
-            
-            # Copy war file to Tomcat webapps directory
-            COPY target/dvja-1.0-SNAPSHOT.war /usr/local/tomcat/webapps/ROOT.war
-            
-            # Configure MySQL connection if needed
-            # ENV MYSQL_USER=dvja
-            # ENV MYSQL_PASSWORD=dvja
-            # ENV MYSQL_DATABASE=dvja
-            # ENV MYSQL_HOST=mysql
-            
-            EXPOSE 8080
-            CMD ["catalina.sh", "run"]
-            EOF
-            echo "Created Dockerfile"
-          else
-            echo "Dockerfile already exists"
-          fi
-      
-      # Step 9: Build and push Docker image to Docker Hub
+      # Step 8: Build and push Docker image to Docker Hub
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
         with:
@@ -106,7 +79,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
       
-      # Step 10: Scan for leaked secrets using Gitleaks
+      # Step 9: Scan for leaked secrets using Gitleaks
       - name: Gitleaks Secret Scan
         uses: gitleaks/gitleaks-action@v2
         id: gitleaks
@@ -114,7 +87,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
-      # Step 11: Run Trivy SCA scan on project filesystem
+      # Step 10: Run Trivy SCA scan on project filesystem
       - name: Trivy Filesystem Scan
         uses: aquasecurity/trivy-action@master
         id: trivy-fs
@@ -125,13 +98,13 @@ jobs:
           severity: 'CRITICAL,HIGH'
         continue-on-error: true  # Non-blocking mode
       
-      # Step 12: Upload Trivy SCA results to GitHub Security
+      # Step 11: Upload Trivy SCA results to GitHub Security
       - name: Upload Trivy SCA results
         uses: github/codeql-action/upload-sarif@v2
         with:
           sarif_file: 'trivy-fs-results.sarif'
         continue-on-error: true
-      # Step 13: Run Trivy scan on the built Docker image
+      # Step 12: Run Trivy scan on the built Docker image
       - name: Trivy Container Scan
         uses: aquasecurity/trivy-action@master
         id: trivy-container
@@ -142,14 +115,14 @@ jobs:
           severity: 'CRITICAL,HIGH'
         continue-on-error: true  # Non-blocking mode
       
-      # Step 14: Upload Trivy container scan results to GitHub Security
+      # Step 13: Upload Trivy container scan results to GitHub Security
       - name: Upload Trivy Container results
         uses: github/codeql-action/upload-sarif@v2
         with:
           sarif_file: 'trivy-container-results.sarif'
         continue-on-error: true
       
-      # Step 15: Parse scan results and create GitHub issues
+      # Step 14: Parse scan results and create GitHub issues
       - name: Create GitHub issues for security findings
         run: |
           # Install jq for JSON parsing
@@ -240,7 +213,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         continue-on-error: true  # Non-blocking mode
       
-      # Step 16: Generate scan summary for GitHub Actions UI
+      # Step 15: Generate scan summary for GitHub Actions UI
       - name: Scan Summary
         run: |
           echo "## DevSecOps Pipeline Security Scan Results" >> $GITHUB_STEP_SUMMARY
