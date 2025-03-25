@@ -1,0 +1,262 @@
+name: DVJA DevSecOps Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-secure:
+    runs-on: ubuntu-latest
+    permissions:
+      # Required for CodeQL analysis
+      security-events: write
+      # Required for issue creation
+      issues: write
+      # Required for checkout and pushing
+      contents: write
+      # Required for container scanning
+      packages: read
+
+    steps:
+      # Step 1: Checkout the code repository
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Fetch all history for proper analysis
+      
+      # Step 2: Set up Java environment for building
+      - name: Set up Java 11
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '11'
+          cache: 'maven'
+      
+      # Step 3: Build the Java application with Maven
+      - name: Build with Maven
+        run: mvn -B clean package -DskipTests
+      
+      # Step 4: Run CodeQL analysis for SAST
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v2
+        with:
+          languages: java
+      
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v2
+        continue-on-error: true  # Non-blocking mode
+      
+      # Step 5: Set up Docker Buildx
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      
+      # Step 6: Login to Docker Hub
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      
+      # Step 7: Extract metadata for Docker tagging
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ secrets.DOCKER_USERNAME }}/dvja
+          tags: |
+            type=raw,value=latest
+            type=sha
+      
+      # Step 8: Create Dockerfile if it doesn't exist
+      - name: Create Dockerfile
+        run: |
+          if [ ! -f Dockerfile ]; then
+            cat > Dockerfile << 'EOF'
+            FROM tomcat:9-jre11
+            
+            # Remove default Tomcat applications
+            RUN rm -rf /usr/local/tomcat/webapps/*
+            
+            # Copy war file to Tomcat webapps directory
+            COPY target/dvja-1.0-SNAPSHOT.war /usr/local/tomcat/webapps/ROOT.war
+            
+            # Configure MySQL connection if needed
+            # ENV MYSQL_USER=dvja
+            # ENV MYSQL_PASSWORD=dvja
+            # ENV MYSQL_DATABASE=dvja
+            # ENV MYSQL_HOST=mysql
+            
+            EXPOSE 8080
+            CMD ["catalina.sh", "run"]
+            EOF
+            echo "Created Dockerfile"
+          else
+            echo "Dockerfile already exists"
+          fi
+      
+      # Step 9: Build and push Docker image to Docker Hub
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+      
+      # Step 10: Scan for leaked secrets using Gitleaks
+      - name: Gitleaks Secret Scan
+        uses: gitleaks/gitleaks-action@v2
+        id: gitleaks
+        continue-on-error: true  # Non-blocking mode
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      # Step 11: Run Trivy SCA scan on project filesystem
+      - name: Trivy Filesystem Scan
+        uses: aquasecurity/trivy-action@master
+        id: trivy-fs
+        with:
+          scan-type: 'fs'
+          format: 'sarif'
+          output: 'trivy-fs-results.sarif'
+          severity: 'CRITICAL,HIGH'
+        continue-on-error: true  # Non-blocking mode
+      
+      # Step 12: Upload Trivy SCA results to GitHub Security
+      - name: Upload Trivy SCA results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: 'trivy-fs-results.sarif'
+        continue-on-error: true
+      
+      # Step 13: Run Trivy scan on the built Docker image
+      - name: Trivy Container Scan
+        uses: aquasecurity/trivy-action@master
+        id: trivy-container
+        with:
+          image-ref: '${{ secrets.DOCKER_USERNAME }}/dvja:latest'
+          format: 'sarif'
+          output: 'trivy-container-results.sarif'
+          severity: 'CRITICAL,HIGH'
+        continue-on-error: true  # Non-blocking mode
+      
+      # Step 14: Upload Trivy container scan results to GitHub Security
+      - name: Upload Trivy Container results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: 'trivy-container-results.sarif'
+        continue-on-error: true
+      
+      # Step 15: Parse scan results and create GitHub issues
+      - name: Create GitHub issues for security findings
+        run: |
+          # Install jq for JSON parsing
+          sudo apt-get update && sudo apt-get install -y jq
+          
+          # Function to create issues from SARIF files
+          create_issues_from_sarif() {
+            local file=$1
+            local scan_type=$2
+            
+            if [ ! -f "$file" ]; then
+              echo "File $file not found, skipping"
+              return
+            fi
+            
+            echo "Processing $scan_type findings from $file"
+            
+            # Extract high and critical findings
+            findings=$(jq -r '.runs[].results[] | select(.level == "error" or .level == "warning") | {rule: .rule.id, description: .message.text, severity: .level, location: (.locations[0].physicalLocation.artifactLocation.uri // "Not specified")}' "$file" 2>/dev/null)
+            
+            if [ -z "$findings" ]; then
+              echo "No high or critical findings in $scan_type scan"
+              return
+            fi
+            
+            # Process each finding
+            echo "$findings" | while read -r finding; do
+              rule=$(echo "$finding" | jq -r '.rule')
+              description=$(echo "$finding" | jq -r '.description')
+              severity=$(echo "$finding" | jq -r '.severity')
+              location=$(echo "$finding" | jq -r '.location')
+              
+              # Map severity
+              if [ "$severity" = "error" ]; then
+                severity_label="critical"
+              else
+                severity_label="high"
+              fi
+              
+              # Create GitHub issue title and body
+              issue_title="[$scan_type] $severity_label: $rule"
+              issue_body="**Description:** $description\n\n**Location:** $location\n\n**Severity:** $severity_label\n\n**Source:** $scan_type scan"
+              
+              echo "Creating issue: $issue_title"
+              
+              # Use GitHub CLI if available, otherwise use API
+              if command -v gh &> /dev/null; then
+                echo "$issue_body" | gh issue create --title "$issue_title" --body-file - --label "security,$severity_label,$scan_type"
+              else
+                # Use GitHub API (this is just a placeholder - GitHub CLI will be available in Actions)
+                echo "Would create issue: $issue_title"
+                echo "With body: $issue_body"
+              fi
+            done
+          }
+          
+          # Process scan results
+          create_issues_from_sarif "trivy-fs-results.sarif" "dependency"
+          create_issues_from_sarif "trivy-container-results.sarif" "container"
+          
+          # Process Gitleaks results if available
+          if [ -f "leak_report.json" ]; then
+            echo "Processing Gitleaks findings"
+            leaks=$(jq -c '.[]' leak_report.json 2>/dev/null)
+            
+            if [ -n "$leaks" ]; then
+              echo "$leaks" | while read -r leak; do
+                description=$(echo "$leak" | jq -r '.Description')
+                file=$(echo "$leak" | jq -r '.File')
+                line=$(echo "$leak" | jq -r '.StartLine')
+                
+                issue_title="[secrets] critical: Potential secret exposure"
+                issue_body="**Description:** $description\n\n**Location:** $file:$line\n\n**Severity:** critical\n\n**Source:** Gitleaks scan"
+                
+                echo "Creating issue: $issue_title"
+                if command -v gh &> /dev/null; then
+                  echo "$issue_body" | gh issue create --title "$issue_title" --body-file - --label "security,critical,secrets"
+                else
+                  echo "Would create issue: $issue_title"
+                  echo "With body: $issue_body"
+                fi
+              done
+            else
+              echo "No secrets found by Gitleaks"
+            fi
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true  # Non-blocking mode
+      
+      # Step 16: Generate scan summary for GitHub Actions UI
+      - name: Scan Summary
+        run: |
+          echo "## DevSecOps Pipeline Security Scan Results" >> $GITHUB_STEP_SUMMARY
+          echo "### Maven Build" >> $GITHUB_STEP_SUMMARY
+          echo "Application built successfully" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### CodeQL Analysis" >> $GITHUB_STEP_SUMMARY
+          echo "Results available in GitHub Security tab" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Docker Image" >> $GITHUB_STEP_SUMMARY
+          echo "Image built and pushed to Docker Hub: ${{ secrets.DOCKER_USERNAME }}/dvja" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Security Scans" >> $GITHUB_STEP_SUMMARY
+          echo "- Gitleaks: Completed (check Issues tab for findings)" >> $GITHUB_STEP_SUMMARY
+          echo "- Trivy SCA: Completed (check Issues tab for findings)" >> $GITHUB_STEP_SUMMARY
+          echo "- Trivy Container: Completed (check Issues tab for findings)" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### GitHub Issues" >> $GITHUB_STEP_SUMMARY
+          echo "Security issues created for high and critical findings" >> $GITHUB_STEP_SUMMARY
