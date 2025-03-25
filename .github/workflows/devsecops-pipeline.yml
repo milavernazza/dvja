@@ -216,6 +216,8 @@ jobs:
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
         continue-on-error: true  # Non-blocking mode
       
       # Step 15: Generate scan summary for GitHub Actions UI
