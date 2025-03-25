@@ -56,7 +56,6 @@ jobs:
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v2
         with:
-          registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
       
@@ -65,7 +64,6 @@ jobs:
         id: meta
         uses: docker/metadata-action@v4
         with:
-          images: ghcr.io/${{ github.repository_owner }}/dvja
           tags: |
             type=raw,value=latest
             type=sha
@@ -104,12 +102,13 @@ jobs:
         with:
           sarif_file: 'trivy-fs-results.sarif'
         continue-on-error: true
+
       # Step 12: Run Trivy scan on the built Docker image
       - name: Trivy Container Scan
         uses: aquasecurity/trivy-action@master
         id: trivy-container
         with:
-          image-ref: 'ghcr.io/${{ github.repository_owner }}/dvja:latest'
+          image-ref: '${{ github.repository_owner }}/dvja:latest'
           format: 'sarif'
           output: 'trivy-container-results.sarif'
           severity: 'CRITICAL,HIGH'
