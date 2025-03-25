@@ -40,12 +40,17 @@ jobs:
       
       # Step 4: Run CodeQL analysis for SAST
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v2
         with:
           languages: java
-      
+          queries: security-and-quality
+          
+      - name: Autobuild with CodeQL
+        uses: github/codeql-action/autobuild@v2
+        continue-on-error: true
+
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v2
         continue-on-error: true  # Non-blocking mode
       
       # Step 5: Set up Docker Buildx
@@ -222,8 +227,8 @@ jobs:
           
           echo "### CodeQL Analysis" >> $GITHUB_STEP_SUMMARY
           echo "Results available in GitHub Security tab" >> $GITHUB_STEP_SUMMARY
+          
           echo "### Docker Image" >> $GITHUB_STEP_SUMMARY
-          echo "Image built and pushed to GitHub Container Registry: ghcr.io/${{ github.repository_owner }}/dvja" >> $GITHUB_STEP_SUMMARY
           echo "Image built and pushed to Docker Hub: ${{ secrets.DOCKER_USERNAME }}/dvja" >> $GITHUB_STEP_SUMMARY
           
           echo "### Security Scans" >> $GITHUB_STEP_SUMMARY
@@ -232,4 +237,4 @@ jobs:
           echo "- Trivy Container: Completed (check Issues tab for findings)" >> $GITHUB_STEP_SUMMARY
           
           echo "### GitHub Issues" >> $GITHUB_STEP_SUMMARY
-          echo "Security issues created for high and critical findings" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Security issues created for high and critical findings" >> $GITHUB_STEP_SUMMARY
